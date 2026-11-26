@@ -1,25 +1,43 @@
 // NusaStat charts: hand-rolled SVG bar and line charts. No chart library —
 // these functions take a series of {label, value} points and return SVG text.
 
-function niceMax(max) {
-  if (max <= 0) return 1;
-  const power = Math.pow(10, Math.floor(Math.log10(max)));
-  const scaled = max / power;
+// Pick a clean step size (1, 2, 2.5, 5 or 10 times a power of ten) just
+// above a raw size, so axis ticks land on round numbers.
+function niceStep(raw) {
+  if (raw <= 0) return 1;
+  const power = Math.pow(10, Math.floor(Math.log10(raw)));
+  const scaled = raw / power;
   const nice = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 2.5 ? 2.5 : scaled <= 5 ? 5 : 10;
   return nice * power;
 }
 
-function niceMin(min, max) {
-  if (min >= 0) return 0;
-  const span = max - min;
-  const power = Math.pow(10, Math.floor(Math.log10(span)));
-  return Math.floor(min / power) * power;
+// Axis bounds for a series: the step is sized from the data range, the
+// bounds are rounded out to whole steps, and a series with no negative
+// value starts at zero (bar charts must not truncate the baseline). The
+// result is at most six steps, so tick labels stay legible and the tallest
+// bar fills most of the plot instead of floating in a too-tall axis —
+// growth used to top out at 5.31 on a -10 to +10 axis.
+function axisFor(values) {
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  let step = niceStep((hi - lo) / 4 || 1);
+  let min = lo >= 0 ? 0 : Math.floor(lo / step) * step;
+  let max = Math.ceil(hi / step) * step;
+  while ((max - min) / step > 6) {
+    step *= 2;
+    min = lo >= 0 ? 0 : Math.floor(lo / step) * step;
+    max = Math.ceil(hi / step) * step;
+  }
+  // Leave headroom above the tallest value so its label never clips the top.
+  if (max - hi < step * 0.15) max += step;
+  if (max === min) max = min + step;
+  return { min, max, step };
 }
 
-function axisLabels(min, max) {
-  const steps = 4;
+function axisTicks(min, max, step) {
   const out = [];
-  for (let i = 0; i <= steps; i++) out.push(min + ((max - min) * i) / steps);
+  const count = Math.round((max - min) / step);
+  for (let i = 0; i <= count; i++) out.push(Math.round((min + i * step) * 1e10) / 1e10);
   return out;
 }
 
@@ -30,9 +48,8 @@ function fmtTick(v) {
   return v.toFixed(1);
 }
 
-function gridLines(min, max, w, h, pad) {
-  const labels = axisLabels(min, max);
-  return labels
+function gridLines(min, max, w, h, pad, ticks) {
+  return ticks
     .map((v) => {
       const y = pad.top + ((max - v) / (max - min)) * (h - pad.top - pad.bottom);
       return (
@@ -50,8 +67,8 @@ export function barChart(points, opts) {
   const h = 300;
   const pad = { top: 16, right: 12, bottom: 34, left: 52 };
   const values = points.map((p) => p.value);
-  const max = niceMax(Math.max(...values));
-  const min = niceMin(Math.min(...values), max);
+  const { min, max, step: axisStep } = axisFor(values);
+  const ticks = axisTicks(min, max, axisStep);
   const plotW = w - pad.left - pad.right;
   const plotH = h - pad.top - pad.bottom;
   const slot = plotW / points.length;
@@ -78,7 +95,7 @@ export function barChart(points, opts) {
   const zero = pad.top + ((max - 0) / (max - min)) * plotH;
   return (
     '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="' + (opts.label || 'Bar chart') + '">' +
-    gridLines(min, max, w, h, pad) +
+    gridLines(min, max, w, h, pad, ticks) +
     '<line x1="' + pad.left + '" y1="' + zero.toFixed(1) + '" x2="' + (w - pad.right) + '" y2="' + zero.toFixed(1) + '" class="chart-axis"/>' +
     bars +
     '</svg>'
@@ -90,10 +107,8 @@ export function lineChart(points, opts) {
   const h = 300;
   const pad = { top: 24, right: 16, bottom: 34, left: 52 };
   const values = points.map((p) => p.value);
-  const rawMax = Math.max(...values);
-  const rawMin = Math.min(...values);
-  const max = niceMax(rawMax);
-  const min = niceMin(rawMin, rawMax);
+  const { min, max, step: axisStep } = axisFor(values);
+  const ticks = axisTicks(min, max, axisStep);
   const plotW = w - pad.left - pad.right;
   const plotH = h - pad.top - pad.bottom;
   const step = points.length > 1 ? plotW / (points.length - 1) : 0;
@@ -117,7 +132,7 @@ export function lineChart(points, opts) {
     .join('');
   return (
     '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="' + (opts.label || 'Line chart') + '">' +
-    gridLines(min, max, w, h, pad) +
+    gridLines(min, max, w, h, pad, ticks) +
     '<path d="' + line + '" class="chart-line" fill="none"/>' +
     dots +
     '</svg>'
